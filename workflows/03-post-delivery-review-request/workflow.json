@@ -1,0 +1,547 @@
+{
+  "name": "WooCommerce - Post-delivery review request",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Post-delivery review request\nTriggers when an order becomes **completed**, waits N days (Config > waitDays), re-checks the order and sends a review request by WhatsApp template or email.\nOrder meta `_review_request_scheduled` / `_review_requested` prevents duplicates. Create the WhatsApp template \"review_request\" with 3 body variables: name, product, link.",
+        "width": 520,
+        "height": 200
+      },
+      "id": "f3ace928-6109-4aa7-a440-64b14378329f",
+      "name": "Setup notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -140
+      ]
+    },
+    {
+      "parameters": {
+        "event": "order.updated"
+      },
+      "id": "c7e8d7cb-0ff8-4788-afa7-c0f51eee4d21",
+      "name": "Order updated",
+      "type": "n8n-nodes-base.wooCommerceTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        200
+      ],
+      "credentials": {
+        "wooCommerceApi": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "WooCommerce API"
+        }
+      },
+      "webhookId": "a84c6b33-6707-4a3e-a488-e9471cc9809d"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a0fa9b67-b43e-4c9a-a381-4f10fc75adbc",
+              "leftValue": "={{ $json.status === 'completed' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "54f6d905-ee92-4a9d-a9ab-b0622214ca77",
+      "name": "Order completed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        220,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "fe3f6d85-dc15-498c-aa26-d696d887d1da",
+              "name": "siteUrl",
+              "value": "https://your-store.example",
+              "type": "string"
+            },
+            {
+              "id": "0e8eed39-2c0c-42e3-ae90-298a9cdf2f6f",
+              "name": "channel",
+              "value": "whatsapp",
+              "type": "string"
+            },
+            {
+              "id": "dd94f698-e68f-4c70-ada4-2cc8c4ce43dc",
+              "name": "defaultCountryCode",
+              "value": "880",
+              "type": "string"
+            },
+            {
+              "id": "82af53bc-dd31-4e72-a10c-a30544c681d9",
+              "name": "waPhoneNumberId",
+              "value": "REPLACE_WITH_PHONE_NUMBER_ID",
+              "type": "string"
+            },
+            {
+              "id": "69e8d7b5-b785-4de7-a7f6-54f629cbed5f",
+              "name": "waLanguage",
+              "value": "en",
+              "type": "string"
+            },
+            {
+              "id": "8a2b6d1a-e968-49a6-aa46-d7f187c5048d",
+              "name": "waTemplateReview",
+              "value": "review_request",
+              "type": "string"
+            },
+            {
+              "id": "7eb798c5-69c7-4677-a25d-c1a95ca5edbd",
+              "name": "fromEmail",
+              "value": "store@your-store.example",
+              "type": "string"
+            },
+            {
+              "id": "90c1f9d4-43aa-4b50-aa05-0f63e66726df",
+              "name": "reviewUrl",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "b6589ad4-7358-4a42-a7c3-024b8b8c8885",
+              "name": "waitDays",
+              "value": 7,
+              "type": "number"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "dd3cd79d-6d50-4e4e-ad12-25bafdc5ce65",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        440,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Prepare the review request for an order that just became \"completed\".\nconst order = $input.first().json;\nconst cfg = $('Config').first().json;\nfunction normalizePhone(raw, cc) {\n  let d = String(raw || '').replace(/\\D/g, '');\n  if (d.startsWith('00')) d = d.slice(2);\n  if (!d) return '';\n  if (d.startsWith(cc)) return d;\n  if (d.startsWith('0')) return cc + d.slice(1);\n  return cc + d;\n}\nconst esc = (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[c]));\n\nconst meta = order.meta_data || [];\nif (meta.some((m) => m.key === '_review_request_scheduled' || m.key === '_review_requested')) return []; // already handled\n\nconst b = order.billing || {};\nconst phone = normalizePhone(b.phone, cfg.defaultCountryCode);\nconst email = b.email || '';\nif (!phone && !email) return [];\n\nconst name = b.first_name || 'there';\nconst first = (order.line_items || [])[0] || {};\nconst reviewUrl = cfg.reviewUrl || (cfg.siteUrl + '/?p=' + first.product_id + '#reviews');\n\nreturn [{\n  json: {\n    orderId: order.id,\n    name,\n    phone,\n    email,\n    reviewUrl,\n    waReview: {\n      messaging_product: 'whatsapp',\n      to: phone,\n      type: 'template',\n      template: {\n        name: cfg.waTemplateReview,\n        language: { code: cfg.waLanguage },\n        components: [{ type: 'body', parameters: [\n          { type: 'text', text: name },\n          { type: 'text', text: first.name || 'your order' },\n          { type: 'text', text: reviewUrl },\n        ] }],\n      },\n    },\n    emailSubject: 'How was your order #' + order.id + '?',\n    emailHtml: '<p>Hi ' + esc(name) + ',</p><p>We hope you are enjoying ' + esc(first.name || 'your order') + '. ' +\n      'Could you take a minute to share a review? It helps other shoppers a lot.</p>' +\n      '<p><a href=\"' + esc(reviewUrl) + '\">Write a review</a></p><p>Thank you!</p>',\n  },\n}];"
+      },
+      "id": "1ff38ef9-8632-4874-a86b-41d63fcd6476",
+      "name": "Normalize order",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $('Config').first().json.siteUrl }}/wp-json/wc/v3/orders/{{ $('Normalize order').first().json.orderId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ meta_data: [{ key: \"_review_request_scheduled\", value: new Date().toISOString() }] }) }}"
+      },
+      "id": "588a783f-abcf-4c58-a8f4-42f777bdb7cc",
+      "name": "Mark scheduled",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        200
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "WooCommerce REST (consumer key and secret)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": "={{ $('Config').first().json.waitDays }}",
+        "unit": "days"
+      },
+      "id": "dc71379d-ac04-46da-a2db-91eccf34d440",
+      "name": "Wait N days",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1100,
+        200
+      ],
+      "webhookId": "b98a8c72-0c02-4d50-ab89-06a2568bb1ba"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').first().json.siteUrl }}/wp-json/wc/v3/orders/{{ $('Normalize order').first().json.orderId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "options": {}
+      },
+      "id": "74243342-fbf4-48b4-a368-3932fbee223e",
+      "name": "Re-check order",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        200
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "WooCommerce REST (consumer key and secret)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "7554c2fe-8390-4ec1-a52e-a70eeb3d0eb2",
+              "leftValue": "={{ $json.status === 'completed' && !($json.meta_data || []).some((m) => m.key === '_review_requested') }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c099929c-86a0-4f7e-aa24-1dd1a99e7594",
+      "name": "Still completed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1540,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "416098b0-b539-43cd-ac77-2e2731918bc1",
+              "leftValue": "={{ $('Config').first().json.channel === 'whatsapp' && !!$('Normalize order').first().json.phone }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a9738e6d-dfba-49dc-aa72-f3a8b1617801",
+      "name": "Use WhatsApp?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1760,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v21.0/{{ $('Config').first().json.waPhoneNumberId }}/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Normalize order').first().json.waReview) }}",
+        "options": {}
+      },
+      "id": "8653d3ee-0d27-4fbe-a1f8-a318465edc7a",
+      "name": "WhatsApp review request",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1980,
+        120
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "WhatsApp Cloud API (Authorization header)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $('Config').first().json.fromEmail }}",
+        "toEmail": "={{ $('Normalize order').first().json.email }}",
+        "subject": "={{ $('Normalize order').first().json.emailSubject }}",
+        "emailFormat": "html",
+        "html": "={{ $('Normalize order').first().json.emailHtml }}",
+        "options": {}
+      },
+      "id": "fa77ea24-c0ea-4c24-a9e7-baa5bc5b8bf4",
+      "name": "Email review request",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1980,
+        300
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $('Config').first().json.siteUrl }}/wp-json/wc/v3/orders/{{ $('Normalize order').first().json.orderId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ meta_data: [{ key: \"_review_requested\", value: new Date().toISOString() }] }) }}"
+      },
+      "id": "f8d33d1a-c2ab-4d0a-a2c9-0e87bedbcb36",
+      "name": "Mark requested",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        200
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "WooCommerce REST (consumer key and secret)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.siteUrl }}/wp-json/wc/v3/orders/{{ $('Normalize order').first().json.orderId }}/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ note: \"Review request sent automatically.\", customer_note: false }) }}"
+      },
+      "id": "1183ba45-99df-45c0-a500-6e2d23fc3603",
+      "name": "Add order note",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2420,
+        200
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "WooCommerce REST (consumer key and secret)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Order updated": {
+      "main": [
+        [
+          {
+            "node": "Order completed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Order completed?": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Normalize order",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize order": {
+      "main": [
+        [
+          {
+            "node": "Mark scheduled",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark scheduled": {
+      "main": [
+        [
+          {
+            "node": "Wait N days",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait N days": {
+      "main": [
+        [
+          {
+            "node": "Re-check order",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Re-check order": {
+      "main": [
+        [
+          {
+            "node": "Still completed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Still completed?": {
+      "main": [
+        [
+          {
+            "node": "Use WhatsApp?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Use WhatsApp?": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp review request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Email review request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp review request": {
+      "main": [
+        [
+          {
+            "node": "Mark requested",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email review request": {
+      "main": [
+        [
+          {
+            "node": "Mark requested",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark requested": {
+      "main": [
+        [
+          {
+            "node": "Add order note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Dhaka"
+  },
+  "tags": [],
+  "pinData": {}
+}

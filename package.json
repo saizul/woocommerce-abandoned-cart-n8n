@@ -1,0 +1,14 @@
+{
+  "name": "woocommerce-abandoned-cart-n8n",
+  "version": "1.0.0",
+  "description": "Importable n8n workflows for WooCommerce checkout recovery, COD confirmation, review requests and daily revenue summaries.",
+  "private": true,
+  "license": "MIT",
+  "author": "Saizul Amin (https://saizul.com)",
+  "type": "module",
+  "scripts": {
+    "validate": "node scripts/validate-workflows.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": { "node": ">=18" }
+}

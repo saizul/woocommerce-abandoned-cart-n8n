@@ -1,0 +1,267 @@
+{
+  "name": "WooCommerce - Daily revenue summary to Telegram",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Daily revenue summary\nRuns every day at 21:00 (store time zone), loads today's orders from the WooCommerce REST API (paginated, 100 per page) and posts a summary to Telegram.\nSet the chat id in the Telegram node and adjust Config (time zone, UTC offset, currency symbol).",
+        "width": 480,
+        "height": 160
+      },
+      "id": "6c2d17fd-315f-4a63-af58-52f6ada919f8",
+      "name": "Setup notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -140
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 21,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "22e6e618-c653-47eb-aa58-65dfbbdf90bb",
+      "name": "Every day 21:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "fe3f6d85-dc15-498c-aa26-d696d887d1da",
+              "name": "siteUrl",
+              "value": "https://your-store.example",
+              "type": "string"
+            },
+            {
+              "id": "facc1f1f-eb52-45ff-a260-d25b522c44ba",
+              "name": "timezone",
+              "value": "Asia/Dhaka",
+              "type": "string"
+            },
+            {
+              "id": "fd75d19c-6a2d-4ab6-af29-e2437158455c",
+              "name": "utcOffset",
+              "value": "+06:00",
+              "type": "string"
+            },
+            {
+              "id": "b484581c-f379-46d8-aaa3-1ef7bed7da7d",
+              "name": "currencySymbol",
+              "value": "৳",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "15d74e52-4e8c-4bc7-aa74-8730988c38d0",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Start and end of \"today\" in the store time zone, as UTC ISO strings for the REST API.\nconst cfg = $('Config').first().json;\nconst day = new Date().toLocaleDateString('en-CA', { timeZone: cfg.timezone }); // YYYY-MM-DD\nconst after = new Date(day + 'T00:00:00' + cfg.utcOffset).toISOString();\nconst before = new Date(day + 'T23:59:59' + cfg.utcOffset).toISOString();\nreturn [{ json: { day, after, before } }];"
+      },
+      "id": "501d0894-730f-4482-adc9-39328fb2b561",
+      "name": "Date range",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').first().json.siteUrl }}/wp-json/wc/v3/orders",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "options": {
+          "pagination": {
+            "pagination": {
+              "parameters": {
+                "parameters": [
+                  {
+                    "type": "qs",
+                    "name": "page",
+                    "value": "={{ $pageCount + 1 }}"
+                  }
+                ]
+              },
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ $response.body.length < 100 }}",
+              "limitPagesFetched": true,
+              "maxRequests": 20
+            }
+          }
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "after",
+              "value": "={{ $('Date range').first().json.after }}"
+            },
+            {
+              "name": "before",
+              "value": "={{ $('Date range').first().json.before }}"
+            },
+            {
+              "name": "per_page",
+              "value": "100"
+            },
+            {
+              "name": "orderby",
+              "value": "date"
+            }
+          ]
+        }
+      },
+      "id": "c98c1db8-3111-49d6-aecd-d35c03ac9f86",
+      "name": "Get today orders",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        200
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "WooCommerce REST (consumer key and secret)"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Build the Telegram message from all orders created today.\nconst cfg = $('Config').first().json;\nconst day = $('Date range').first().json.day;\nconst esc = (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[c]));\nconst orders = $input.all().map((i) => i.json).filter((o) => o && o.id);\n\nconst PAID = ['processing', 'completed', 'on-hold'];\nconst counted = orders.filter((o) => PAID.includes(o.status));\nconst sum = (list) => list.reduce((t, o) => t + (parseFloat(o.total) || 0), 0);\nconst money = (n) => cfg.currencySymbol + n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });\n\nconst revenue = sum(counted);\nconst cod = counted.filter((o) => o.payment_method === 'cod');\nconst prepaid = counted.filter((o) => o.payment_method !== 'cod');\nconst count = (s) => orders.filter((o) => o.status === s).length;\n\nconst products = {};\nfor (const o of counted) {\n  for (const li of o.line_items || []) {\n    products[li.name] = (products[li.name] || 0) + li.quantity;\n  }\n}\nconst top = Object.entries(products).sort((a, b) => b[1] - a[1]).slice(0, 3);\n\nconst lines = [\n  '<b>Daily summary - ' + esc(day) + '</b>',\n  '',\n  'Revenue: <b>' + money(revenue) + '</b> from ' + counted.length + ' orders',\n  'Average order: ' + money(counted.length ? revenue / counted.length : 0),\n  'COD: ' + cod.length + ' (' + money(sum(cod)) + ')  |  Prepaid: ' + prepaid.length + ' (' + money(sum(prepaid)) + ')',\n  '',\n  'Pending payment: ' + count('pending') + '  |  Failed: ' + count('failed') + '  |  Cancelled: ' + count('cancelled'),\n];\nif (top.length) {\n  lines.push('', '<b>Top products</b>');\n  top.forEach(([n, q], i) => lines.push((i + 1) + '. ' + esc(n) + ' x ' + q));\n}\nreturn [{ json: { message: lines.join('\\n') } }];"
+      },
+      "id": "4809d048-4a15-4f5d-a061-12a77838c72d",
+      "name": "Build summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "REPLACE_WITH_CHAT_ID",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "parse_mode": "HTML",
+          "appendAttribution": false
+        }
+      },
+      "id": "4173f69e-79e8-47b7-a003-a9173ea4e1fc",
+      "name": "Send to Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1100,
+        200
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "Telegram bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every day 21:00": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Date range",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Date range": {
+      "main": [
+        [
+          {
+            "node": "Get today orders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get today orders": {
+      "main": [
+        [
+          {
+            "node": "Build summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build summary": {
+      "main": [
+        [
+          {
+            "node": "Send to Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Dhaka"
+  },
+  "tags": [],
+  "pinData": {}
+}

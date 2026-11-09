@@ -1,0 +1,894 @@
+{
+  "name": "WooCommerce - COD order confirmation",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## COD order confirmation\n**Branch A** (top): new COD order -> Google Sheets call queue -> WhatsApp template with Confirm / Cancel buttons.\n**Branch B** (bottom): Meta WhatsApp webhook -> parse button tap -> update WooCommerce order status + note -> update the sheet.\nThe template \"cod_order_confirmation\" needs two quick-reply buttons and 3 body variables: name, order number, total.",
+        "width": 520,
+        "height": 200
+      },
+      "id": "2365a040-ac0f-40a0-a288-5b6f1aa32e6d",
+      "name": "Setup notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "event": "order.created"
+      },
+      "id": "2f8950d0-974f-4cfd-acff-9212a009e266",
+      "name": "New WooCommerce order",
+      "type": "n8n-nodes-base.wooCommerceTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        100
+      ],
+      "credentials": {
+        "wooCommerceApi": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "WooCommerce API"
+        }
+      },
+      "webhookId": "ba770f4f-1a6d-4d8c-a204-ea1ffbe9a902"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "fe3f6d85-dc15-498c-aa26-d696d887d1da",
+              "name": "siteUrl",
+              "value": "https://your-store.example",
+              "type": "string"
+            },
+            {
+              "id": "dd94f698-e68f-4c70-ada4-2cc8c4ce43dc",
+              "name": "defaultCountryCode",
+              "value": "880",
+              "type": "string"
+            },
+            {
+              "id": "82af53bc-dd31-4e72-a10c-a30544c681d9",
+              "name": "waPhoneNumberId",
+              "value": "REPLACE_WITH_PHONE_NUMBER_ID",
+              "type": "string"
+            },
+            {
+              "id": "69e8d7b5-b785-4de7-a7f6-54f629cbed5f",
+              "name": "waLanguage",
+              "value": "en",
+              "type": "string"
+            },
+            {
+              "id": "cd4c8911-79ef-4f25-a2ab-b86d88372d65",
+              "name": "waTemplateConfirm",
+              "value": "cod_order_confirmation",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "71f6838a-95f9-4083-af80-77fdef8dac4a",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "74315669-a8d0-4a80-a014-0d30fd62c109",
+              "leftValue": "={{ $json.payment_method === 'cod' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "17a6d19a-0aba-4f18-a49c-957fc967271e",
+      "name": "Is COD order?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Normalize a new COD order and build the WhatsApp template payload.\nconst order = $input.first().json.body ?? $input.first().json;\nconst cfg = $('Config').first().json;\nfunction normalizePhone(raw, cc) {\n  let d = String(raw || '').replace(/\\D/g, '');\n  if (d.startsWith('00')) d = d.slice(2);\n  if (!d) return '';\n  if (d.startsWith(cc)) return d;\n  if (d.startsWith('0')) return cc + d.slice(1);\n  return cc + d;\n}\n\nif (!order || !order.id) return [];\nconst b = order.billing || {};\nconst s = order.shipping || {};\nconst phone = normalizePhone(b.phone, cfg.defaultCountryCode);\nconst items = (order.line_items || []).map((i) => i.quantity + ' x ' + i.name).join(', ');\nconst address = [s.address_1 || b.address_1, s.city || b.city, s.state || b.state].filter(Boolean).join(', ');\nconst total = order.currency_symbol ? order.currency_symbol + order.total : order.total + ' ' + order.currency;\nconst name = b.first_name || 'Customer';\n\nreturn [{\n  json: {\n    orderId: order.id,\n    name: ((b.first_name || '') + ' ' + (b.last_name || '')).trim(),\n    phone,\n    address,\n    items,\n    total,\n    createdAt: order.date_created,\n    waConfirm: phone ? {\n      messaging_product: 'whatsapp',\n      to: phone,\n      type: 'template',\n      template: {\n        name: cfg.waTemplateConfirm,\n        language: { code: cfg.waLanguage },\n        components: [\n          { type: 'body', parameters: [\n            { type: 'text', text: name },\n            { type: 'text', text: String(order.id) },\n            { type: 'text', text: String(total) },\n          ] },\n          { type: 'button', sub_type: 'quick_reply', index: '0', parameters: [{ type: 'payload', payload: 'CONFIRM|' + order.id }] },\n          { type: 'button', sub_type: 'quick_reply', index: '1', parameters: [{ type: 'payload', payload: 'CANCEL|' + order.id }] },\n        ],\n      },\n    } : null,\n  },\n}];"
+      },
+      "id": "23e25591-2281-40b8-acc7-a79e46394a65",
+      "name": "Normalize COD order",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SPREADSHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "COD Queue",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Order ID": "={{ $json.orderId }}",
+            "Customer": "={{ $json.name }}",
+            "Phone": "={{ $json.phone }}",
+            "Address": "={{ $json.address }}",
+            "Items": "={{ $json.items }}",
+            "Total": "={{ $json.total }}",
+            "Status": "Awaiting confirmation",
+            "Call result": "",
+            "Created at": "={{ $json.createdAt }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "6a6a5ed4-7ee1-496a-ab32-ebed397479f7",
+      "name": "Add to call queue",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        880,
+        100
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ff284307-f418-4821-a929-1499bf0c0d0e",
+              "leftValue": "={{ !!$('Normalize COD order').first().json.phone }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "581a5bbc-463c-46ee-a22a-7868c21429d9",
+      "name": "Has phone number?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v21.0/{{ $('Config').first().json.waPhoneNumberId }}/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Normalize COD order').first().json.waConfirm) }}",
+        "options": {}
+      },
+      "id": "c5af58b3-0673-4237-a00b-ca11a05f9c95",
+      "name": "WhatsApp confirmation buttons",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        100
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "WhatsApp Cloud API (Authorization header)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "whatsapp-cod-reply",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "94e59696-c114-4073-a705-422733c3c42a",
+      "name": "WhatsApp verify (GET)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        420
+      ],
+      "webhookId": "b04405e1-c85f-497a-a5e6-a134cb223b11"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "60f70f58-39a4-4c74-ace7-0bbd193f608a",
+              "leftValue": "={{ $json.query['hub.verify_token'] === 'REPLACE_WITH_VERIFY_TOKEN' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "2a6f0cc9-059d-4f22-ad2e-d7d50a950276",
+      "name": "Verify token matches?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        220,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $('WhatsApp verify (GET)').first().json.query['hub.challenge'] }}",
+        "options": {}
+      },
+      "id": "f8c36521-f401-4d24-a92c-fedf05bfedb0",
+      "name": "Respond challenge",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        440,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "Forbidden",
+        "options": {
+          "responseCode": 403
+        }
+      },
+      "id": "fd726534-a312-4caf-aa48-aa6719d590b4",
+      "name": "Respond forbidden",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        440,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp-cod-reply",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "1b35df03-199c-4f60-ac07-c50da0f364b1",
+      "name": "WhatsApp replies (POST)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        700
+      ],
+      "webhookId": "9726d90e-5e4e-4345-af10-1fb4a0fbec58"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "36def0ad-2e27-408a-afb7-0470b9aad619",
+              "name": "siteUrl",
+              "value": "https://your-store.example",
+              "type": "string"
+            },
+            {
+              "id": "7bde6be2-d9e2-4317-a646-3e8cfac74906",
+              "name": "waPhoneNumberId",
+              "value": "REPLACE_WITH_PHONE_NUMBER_ID",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "f51d7be7-26d1-42c1-abd2-58147da77607",
+      "name": "Config (reply)",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Extract the customer's button tap from the Meta webhook payload.\nconst body = $input.first().json.body ?? {};\nconst msg = body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];\nif (!msg) return []; // status callbacks (sent / delivered / read) are ignored\n\nconst payload = msg.button?.payload || msg.interactive?.button_reply?.id || '';\nconst m = /^(CONFIRM|CANCEL)\\|(\\d+)$/.exec(payload);\nif (!m) return [];\n\nreturn [{ json: { action: m[1], orderId: Number(m[2]), from: msg.from, repliedAt: new Date().toISOString() } }];"
+      },
+      "id": "0935b426-01e4-4cef-ac34-df8ef2dc58c9",
+      "name": "Parse reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c5a78600-97b4-42a5-a77e-318b6bc12357",
+              "leftValue": "={{ $('Parse reply').first().json.action === 'CONFIRM' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "56fae78e-b235-456a-a969-76bb5fc3e6c9",
+      "name": "Customer confirmed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $('Config (reply)').first().json.siteUrl }}/wp-json/wc/v3/orders/{{ $('Parse reply').first().json.orderId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: \"processing\" }) }}"
+      },
+      "id": "35bd43ce-e8ec-4fd4-a2a8-d7d341bca3c3",
+      "name": "Order: processing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        620
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "WooCommerce REST (consumer key and secret)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config (reply)').first().json.siteUrl }}/wp-json/wc/v3/orders/{{ $('Parse reply').first().json.orderId }}/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ note: \"Customer confirmed the COD order via WhatsApp.\", customer_note: false }) }}"
+      },
+      "id": "ea161262-31dc-4396-ab92-61d7900fb61d",
+      "name": "Note: confirmed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        620
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "WooCommerce REST (consumer key and secret)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SPREADSHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "COD Queue",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Order ID": "={{ $('Parse reply').first().json.orderId }}",
+            "Status": "Confirmed by customer",
+            "Call result": "No call needed",
+            "Replied at": "={{ $('Parse reply').first().json.repliedAt }}"
+          },
+          "matchingColumns": [
+            "Order ID"
+          ],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "cbd3f680-d1b6-4923-ae69-dfc402360e81",
+      "name": "Queue: confirmed",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1320,
+        620
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v21.0/{{ $('Config (reply)').first().json.waPhoneNumberId }}/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ messaging_product: 'whatsapp', to: $('Parse reply').first().json.from, type: 'text', text: { body: 'Thank you! Your order #' + $('Parse reply').first().json.orderId + ' is confirmed and will be shipped soon.' } }) }}",
+        "options": {}
+      },
+      "id": "f6fe3989-a6bf-4fa4-abc4-1faac42cd2a5",
+      "name": "Thank you message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        620
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "WhatsApp Cloud API (Authorization header)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $('Config (reply)').first().json.siteUrl }}/wp-json/wc/v3/orders/{{ $('Parse reply').first().json.orderId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: \"cancelled\" }) }}"
+      },
+      "id": "5735c395-a210-4100-aaba-c7f8ebc220d8",
+      "name": "Order: cancelled",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        800
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "WooCommerce REST (consumer key and secret)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config (reply)').first().json.siteUrl }}/wp-json/wc/v3/orders/{{ $('Parse reply').first().json.orderId }}/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ note: \"Customer cancelled the COD order via WhatsApp.\", customer_note: false }) }}"
+      },
+      "id": "6975c398-bad9-4837-ab6d-0a071b572b0a",
+      "name": "Note: cancelled",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        800
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "WooCommerce REST (consumer key and secret)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SPREADSHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "COD Queue",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Order ID": "={{ $('Parse reply').first().json.orderId }}",
+            "Status": "Cancelled by customer",
+            "Call result": "No call needed",
+            "Replied at": "={{ $('Parse reply').first().json.repliedAt }}"
+          },
+          "matchingColumns": [
+            "Order ID"
+          ],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "7b310f92-dc76-45b0-ade9-156dc8e373e6",
+      "name": "Queue: cancelled",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1320,
+        800
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v21.0/{{ $('Config (reply)').first().json.waPhoneNumberId }}/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ messaging_product: 'whatsapp', to: $('Parse reply').first().json.from, type: 'text', text: { body: 'Your order #' + $('Parse reply').first().json.orderId + ' has been cancelled. You are always welcome to order again.' } }) }}",
+        "options": {}
+      },
+      "id": "7a109d60-d2cf-4b12-a924-9d5cafa11346",
+      "name": "Cancellation message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        800
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "WhatsApp Cloud API (Authorization header)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    }
+  ],
+  "connections": {
+    "New WooCommerce order": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Is COD order?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is COD order?": {
+      "main": [
+        [
+          {
+            "node": "Normalize COD order",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize COD order": {
+      "main": [
+        [
+          {
+            "node": "Add to call queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add to call queue": {
+      "main": [
+        [
+          {
+            "node": "Has phone number?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has phone number?": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp confirmation buttons",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp verify (GET)": {
+      "main": [
+        [
+          {
+            "node": "Verify token matches?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify token matches?": {
+      "main": [
+        [
+          {
+            "node": "Respond challenge",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond forbidden",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp replies (POST)": {
+      "main": [
+        [
+          {
+            "node": "Config (reply)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config (reply)": {
+      "main": [
+        [
+          {
+            "node": "Parse reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse reply": {
+      "main": [
+        [
+          {
+            "node": "Customer confirmed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Customer confirmed?": {
+      "main": [
+        [
+          {
+            "node": "Order: processing",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Order: cancelled",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Order: processing": {
+      "main": [
+        [
+          {
+            "node": "Note: confirmed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Note: confirmed": {
+      "main": [
+        [
+          {
+            "node": "Queue: confirmed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Queue: confirmed": {
+      "main": [
+        [
+          {
+            "node": "Thank you message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Order: cancelled": {
+      "main": [
+        [
+          {
+            "node": "Note: cancelled",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Note: cancelled": {
+      "main": [
+        [
+          {
+            "node": "Queue: cancelled",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Queue: cancelled": {
+      "main": [
+        [
+          {
+            "node": "Cancellation message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Dhaka"
+  },
+  "tags": [],
+  "pinData": {}
+}

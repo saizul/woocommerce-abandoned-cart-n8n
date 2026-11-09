@@ -1,0 +1,853 @@
+{
+  "name": "WooCommerce - Abandoned checkout recovery",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Abandoned checkout recovery\n1. Import, then replace every REPLACE_WITH_* placeholder (Config node, credentials, spreadsheet id).\n2. In WooCommerce > Settings > Advanced > Webhooks add two webhooks (Order created, Order updated) pointing to this workflow's **Production URL**.\n3. Create the Google Sheet tab \"Recovery Log\" with the header row used by the log nodes.\n4. Activate the workflow.",
+        "width": 420,
+        "height": 230
+      },
+      "id": "e2640a8e-53f4-417a-a055-131c2478e89b",
+      "name": "Setup notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "woo-checkout-recovery",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "435daa02-a2c2-4ee9-a332-e598bbd3ef21",
+      "name": "WooCommerce order webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        200
+      ],
+      "webhookId": "be625175-e045-4540-a084-368cba561d3e"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "fe3f6d85-dc15-498c-aa26-d696d887d1da",
+              "name": "siteUrl",
+              "value": "https://your-store.example",
+              "type": "string"
+            },
+            {
+              "id": "0e8eed39-2c0c-42e3-ae90-298a9cdf2f6f",
+              "name": "channel",
+              "value": "whatsapp",
+              "type": "string"
+            },
+            {
+              "id": "dd94f698-e68f-4c70-ada4-2cc8c4ce43dc",
+              "name": "defaultCountryCode",
+              "value": "880",
+              "type": "string"
+            },
+            {
+              "id": "82af53bc-dd31-4e72-a10c-a30544c681d9",
+              "name": "waPhoneNumberId",
+              "value": "REPLACE_WITH_PHONE_NUMBER_ID",
+              "type": "string"
+            },
+            {
+              "id": "69e8d7b5-b785-4de7-a7f6-54f629cbed5f",
+              "name": "waLanguage",
+              "value": "en",
+              "type": "string"
+            },
+            {
+              "id": "5ff1bea5-616e-443f-a207-2824ac50b872",
+              "name": "waTemplateReminder1",
+              "value": "checkout_reminder_1",
+              "type": "string"
+            },
+            {
+              "id": "4365ed10-2aec-4a2d-ac07-909eefbb34dd",
+              "name": "waTemplateReminder2",
+              "value": "checkout_reminder_2",
+              "type": "string"
+            },
+            {
+              "id": "7eb798c5-69c7-4677-a25d-c1a95ca5edbd",
+              "name": "fromEmail",
+              "value": "store@your-store.example",
+              "type": "string"
+            },
+            {
+              "id": "b14253c1-911c-49c8-ace8-c087ca214d95",
+              "name": "firstWaitMinutes",
+              "value": 60,
+              "type": "number"
+            },
+            {
+              "id": "8acb5632-b44e-483e-a967-8c77c0f4f5d2",
+              "name": "secondWaitMinutes",
+              "value": 1440,
+              "type": "number"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "7c26a793-2452-4269-a0bc-0c234e741e7d",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Keep only unpaid (pending / failed) online-payment orders that we can contact.\nconst order = $input.first().json.body ?? $input.first().json;\nconst cfg = $('Config').first().json;\nfunction normalizePhone(raw, cc) {\n  let d = String(raw || '').replace(/\\D/g, '');\n  if (d.startsWith('00')) d = d.slice(2);\n  if (!d) return '';\n  if (d.startsWith(cc)) return d;\n  if (d.startsWith('0')) return cc + d.slice(1);\n  return cc + d;\n}\nconst esc = (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[c]));\n\nif (!order || !order.id) return [];\nif (!['pending', 'failed'].includes(order.status)) return [];\nif (order.payment_method === 'cod') return [];\n\n// WooCommerce sends several webhooks per order. Process each order only once.\nconst seen = $getWorkflowStaticData('global');\nseen.orders = seen.orders || {};\nconst now = Date.now();\nfor (const id of Object.keys(seen.orders)) {\n  if (now - seen.orders[id] > 7 * 24 * 3600 * 1000) delete seen.orders[id];\n}\nif (seen.orders[order.id]) return [];\n\nconst b = order.billing || {};\nconst phone = normalizePhone(b.phone, cfg.defaultCountryCode);\nconst email = b.email || '';\nif (!phone && !email) return [];\nseen.orders[order.id] = now;\n\nconst name = b.first_name || 'there';\nconst total = order.currency_symbol ? order.currency_symbol + order.total : order.total + ' ' + order.currency;\nconst checkoutUrl = order.payment_url ||\n  (cfg.siteUrl + '/checkout/order-pay/' + order.id + '/?pay_for_order=true&key=' + order.order_key);\n\nconst wa = (template) => ({\n  messaging_product: 'whatsapp',\n  to: phone,\n  type: 'template',\n  template: {\n    name: template,\n    language: { code: cfg.waLanguage },\n    components: [{\n      type: 'body',\n      parameters: [\n        { type: 'text', text: name },\n        { type: 'text', text: String(total) },\n        { type: 'text', text: checkoutUrl },\n      ],\n    }],\n  },\n});\n\nconst html = (intro) =>\n  '<p>Hi ' + esc(name) + ',</p><p>' + intro + '</p>' +\n  '<p><a href=\"' + esc(checkoutUrl) + '\">Complete your order (' + esc(total) + ')</a></p>' +\n  '<p>Need help? Just reply to this email.</p>';\n\nreturn [{\n  json: {\n    orderId: order.id,\n    status: order.status,\n    name,\n    phone,\n    email,\n    total,\n    currency: order.currency,\n    checkoutUrl,\n    waReminder1: wa(cfg.waTemplateReminder1),\n    waReminder2: wa(cfg.waTemplateReminder2),\n    emailSubject1: 'You left something behind - order #' + order.id,\n    emailHtml1: html('Your order is saved and waiting for payment. It only takes a minute to finish.'),\n    emailSubject2: 'Last reminder: your order #' + order.id + ' is still unpaid',\n    emailHtml2: html('This is a last reminder. Unpaid orders are cancelled automatically, so please complete payment soon if you still want these items.'),\n  },\n}];"
+      },
+      "id": "2dea9d8e-fe47-4b60-a714-9d56d41a988c",
+      "name": "Normalize order",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": "={{ $('Config').first().json.firstWaitMinutes }}",
+        "unit": "minutes"
+      },
+      "id": "c201f61d-2915-499e-a5a5-e69eef859a43",
+      "name": "Wait before check 1",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        200
+      ],
+      "webhookId": "f4589209-d2d4-452e-a616-1c46e3ed286d"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').first().json.siteUrl }}/wp-json/wc/v3/orders/{{ $('Normalize order').first().json.orderId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "options": {}
+      },
+      "id": "12ebec4c-2c38-4358-a97c-7610764cec20",
+      "name": "Re-check order (1)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        200
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "WooCommerce REST (consumer key and secret)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "df5d2c71-ff95-41c6-a040-79addfcfde56",
+              "leftValue": "={{ ['pending','failed'].includes($json.status) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "780ae984-d552-4750-a55c-be93f87e8e66",
+      "name": "Still unpaid? (1)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "75668314-0a6c-423d-a42a-6d674a23f6bb",
+              "leftValue": "={{ $('Config').first().json.channel === 'whatsapp' && !!$('Normalize order').first().json.phone }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ee700f8b-bcf2-4c82-a501-7cc5a83de60f",
+      "name": "Use WhatsApp? (1)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v21.0/{{ $('Config').first().json.waPhoneNumberId }}/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Normalize order').first().json.waReminder1) }}",
+        "options": {}
+      },
+      "id": "b450db62-c91d-43ad-a626-b5b5e1fe2bec",
+      "name": "WhatsApp reminder 1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        20
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "WhatsApp Cloud API (Authorization header)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $('Config').first().json.fromEmail }}",
+        "toEmail": "={{ $('Normalize order').first().json.email }}",
+        "subject": "={{ $('Normalize order').first().json.emailSubject1 }}",
+        "emailFormat": "html",
+        "html": "={{ $('Normalize order').first().json.emailHtml1 }}",
+        "options": {}
+      },
+      "id": "d523c070-d5d8-4293-af6a-fd05ef8146db",
+      "name": "Email reminder 1",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1540,
+        200
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Pass the normalized order forward after reminder 1 was sent.\nconst o = $('Normalize order').first().json;\nconst channel = $('Config').first().json.channel === 'whatsapp' && o.phone ? 'whatsapp' : 'email';\nreturn [{ json: { ...o, reminder: 1, channelUsed: channel, sentAt: new Date().toISOString() } }];"
+      },
+      "id": "1f6b21f8-e8b0-4c9c-a864-5e8314c17fe3",
+      "name": "Reminder 1 sent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SPREADSHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Recovery Log",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Order ID": "={{ $json.orderId }}",
+            "Customer": "={{ $json.name }}",
+            "Phone": "={{ $json.phone }}",
+            "Email": "={{ $json.email }}",
+            "Total": "={{ $json.total }}",
+            "Reminder": "1",
+            "Channel": "={{ $json.channelUsed }}",
+            "Status": "Reminder sent",
+            "Timestamp": "={{ $json.sentAt }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "e0913458-c6cd-4122-a038-3face347b4ca",
+      "name": "Log reminder 1",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1980,
+        100
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": "={{ $('Config').first().json.secondWaitMinutes }}",
+        "unit": "minutes"
+      },
+      "id": "9e22e51d-2045-455b-a162-c58a4c166d45",
+      "name": "Wait before check 2",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2200,
+        100
+      ],
+      "webhookId": "0a31bcac-10c2-4fd6-a7cc-e59b4208de15"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').first().json.siteUrl }}/wp-json/wc/v3/orders/{{ $('Normalize order').first().json.orderId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "options": {}
+      },
+      "id": "2bd51611-a649-478f-a388-be86a81679e5",
+      "name": "Re-check order (2)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2420,
+        100
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "WooCommerce REST (consumer key and secret)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "20004a89-0766-4afd-adcb-d41f6c045eec",
+              "leftValue": "={{ ['pending','failed'].includes($json.status) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "02300903-5d18-4c00-a2a3-f78ffc644711",
+      "name": "Still unpaid? (2)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2640,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "b10bc94d-c58f-4385-ab15-e8f35ccc60df",
+              "leftValue": "={{ $('Config').first().json.channel === 'whatsapp' && !!$('Normalize order').first().json.phone }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "67545f04-d3bb-4008-a6c9-5c72ecb056be",
+      "name": "Use WhatsApp? (2)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2860,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v21.0/{{ $('Config').first().json.waPhoneNumberId }}/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Normalize order').first().json.waReminder2) }}",
+        "options": {}
+      },
+      "id": "c77db6db-6af8-48a6-a5a8-f332cf7bd91f",
+      "name": "WhatsApp reminder 2",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3080,
+        -80
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "WhatsApp Cloud API (Authorization header)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $('Config').first().json.fromEmail }}",
+        "toEmail": "={{ $('Normalize order').first().json.email }}",
+        "subject": "={{ $('Normalize order').first().json.emailSubject2 }}",
+        "emailFormat": "html",
+        "html": "={{ $('Normalize order').first().json.emailHtml2 }}",
+        "options": {}
+      },
+      "id": "87790c38-79a9-48d4-a1c1-25f2a0977c18",
+      "name": "Email reminder 2",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        3080,
+        100
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Pass the normalized order forward after reminder 2 was sent.\nconst o = $('Normalize order').first().json;\nconst channel = $('Config').first().json.channel === 'whatsapp' && o.phone ? 'whatsapp' : 'email';\nreturn [{ json: { ...o, reminder: 2, channelUsed: channel, sentAt: new Date().toISOString() } }];"
+      },
+      "id": "11007dc2-c20e-4633-a051-32a586bcd8f9",
+      "name": "Reminder 2 sent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3300,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SPREADSHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Recovery Log",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Order ID": "={{ $json.orderId }}",
+            "Customer": "={{ $json.name }}",
+            "Phone": "={{ $json.phone }}",
+            "Email": "={{ $json.email }}",
+            "Total": "={{ $json.total }}",
+            "Reminder": "2",
+            "Channel": "={{ $json.channelUsed }}",
+            "Status": "Reminder sent",
+            "Timestamp": "={{ $json.sentAt }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "fdccdde2-181e-4227-a8b5-602c87481611",
+      "name": "Log reminder 2",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        3520,
+        0
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SPREADSHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Recovery Log",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Order ID": "={{ $('Normalize order').first().json.orderId }}",
+            "Customer": "={{ $('Normalize order').first().json.name }}",
+            "Phone": "={{ $('Normalize order').first().json.phone }}",
+            "Email": "={{ $('Normalize order').first().json.email }}",
+            "Total": "={{ $('Normalize order').first().json.total }}",
+            "Reminder": "",
+            "Channel": "",
+            "Status": "Paid before reminder (recovered or self-completed)",
+            "Timestamp": "={{ new Date().toISOString() }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "b82d9478-a018-44a3-a401-14edcb070536",
+      "name": "Log recovered",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2860,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "WooCommerce order webhook": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Normalize order",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize order": {
+      "main": [
+        [
+          {
+            "node": "Wait before check 1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait before check 1": {
+      "main": [
+        [
+          {
+            "node": "Re-check order (1)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Re-check order (1)": {
+      "main": [
+        [
+          {
+            "node": "Still unpaid? (1)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Still unpaid? (1)": {
+      "main": [
+        [
+          {
+            "node": "Use WhatsApp? (1)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log recovered",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Use WhatsApp? (1)": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp reminder 1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Email reminder 1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp reminder 1": {
+      "main": [
+        [
+          {
+            "node": "Reminder 1 sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email reminder 1": {
+      "main": [
+        [
+          {
+            "node": "Reminder 1 sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reminder 1 sent": {
+      "main": [
+        [
+          {
+            "node": "Log reminder 1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log reminder 1": {
+      "main": [
+        [
+          {
+            "node": "Wait before check 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait before check 2": {
+      "main": [
+        [
+          {
+            "node": "Re-check order (2)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Re-check order (2)": {
+      "main": [
+        [
+          {
+            "node": "Still unpaid? (2)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Still unpaid? (2)": {
+      "main": [
+        [
+          {
+            "node": "Use WhatsApp? (2)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log recovered",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Use WhatsApp? (2)": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp reminder 2",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Email reminder 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp reminder 2": {
+      "main": [
+        [
+          {
+            "node": "Reminder 2 sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email reminder 2": {
+      "main": [
+        [
+          {
+            "node": "Reminder 2 sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reminder 2 sent": {
+      "main": [
+        [
+          {
+            "node": "Log reminder 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Dhaka"
+  },
+  "tags": [],
+  "pinData": {}
+}
