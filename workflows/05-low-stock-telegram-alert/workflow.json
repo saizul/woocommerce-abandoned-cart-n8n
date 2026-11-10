@@ -1,0 +1,153 @@
+{
+  "name": "WooCommerce - Low-stock alert to Telegram",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Low-stock alert\nFires when WooCommerce updates a product (including stock changes from orders), checks the stock quantity against the threshold in Config and posts to Telegram once per product and level (low, then out of stock). It is announced again only after stock recovered.\nSet the chat id in the Telegram node, edit Config, and make sure \"Manage stock\" is on for the products you want to watch.",
+        "width": 520,
+        "height": 200
+      },
+      "id": "b2f3c1a0-6a7e-4d0c-9a51-0d6e2f8c1a01",
+      "name": "Setup notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -140
+      ]
+    },
+    {
+      "parameters": {
+        "event": "product.updated"
+      },
+      "id": "b2f3c1a0-6a7e-4d0c-9a51-0d6e2f8c1a02",
+      "name": "Product updated",
+      "type": "n8n-nodes-base.wooCommerceTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        200
+      ],
+      "credentials": {
+        "wooCommerceApi": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "WooCommerce API"
+        }
+      },
+      "webhookId": "5d0c7a52-3f1b-4c7e-8a64-2b9e1f4d7c03"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "b2f3c1a0-6a7e-4d0c-9a51-0d6e2f8c1a05",
+              "name": "siteUrl",
+              "value": "https://your-store.example",
+              "type": "string"
+            },
+            {
+              "id": "b2f3c1a0-6a7e-4d0c-9a51-0d6e2f8c1a06",
+              "name": "threshold",
+              "value": 5,
+              "type": "number"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "b2f3c1a0-6a7e-4d0c-9a51-0d6e2f8c1a04",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Decide whether this product update needs a stock alert. Each product is announced once per level\n// (low, then out of stock) and is announced again only after its stock recovered above the threshold.\nconst cfg = $('Config').first().json;\nconst p = $('Product updated').first().json;\nif (!p || !p.id) return [];\n\nconst threshold = Number.isFinite(Number(cfg.threshold)) ? Number(cfg.threshold) : 5;\nconst state = $getWorkflowStaticData('global');\nstate.alerted = state.alerted || {};\nconst key = String(p.id);\n\n// Stock is only tracked as a number when \"Manage stock\" is on for the product.\nconst qty = p.manage_stock && p.stock_quantity !== null && p.stock_quantity !== undefined ? Number(p.stock_quantity) : null;\nconst isOut = p.stock_status === 'outofstock' || (qty !== null && qty <= 0);\nconst isLow = qty !== null && qty <= threshold;\n\nif (!isOut && !isLow) {\n  delete state.alerted[key]; // stock recovered: allow a new alert next time\n  return [];\n}\n\nconst level = isOut ? 'out' : 'low';\nif (state.alerted[key] === level) return [];\nstate.alerted[key] = level;\n\n// Keep the remembered list bounded.\nconst keys = Object.keys(state.alerted);\nif (keys.length > 2000) keys.slice(0, keys.length - 2000).forEach((k) => delete state.alerted[k]);\n\nconst esc = (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[c]));\nconst site = String(cfg.siteUrl || '').replace(/\\/+$/, '');\nconst editUrl = site + '/wp-admin/post.php?post=' + encodeURIComponent(p.id) + '&action=edit';\n\nconst lines = [\n  (isOut ? '<b>Out of stock</b>' : '<b>Low stock</b>') + ': ' + esc(p.name),\n  p.sku ? 'SKU: ' + esc(p.sku) : null,\n  isOut ? 'Stock: 0' : 'Stock left: ' + qty + ' (alert at ' + threshold + ' or less)',\n  p.backorders && p.backorders !== 'no' ? 'Backorders: ' + esc(p.backorders) : null,\n  '<a href=\"' + esc(editUrl) + '\">Edit product</a>',\n].filter(Boolean);\n\nreturn [{ json: { message: lines.join('\\n'), productId: p.id, level } }];"
+      },
+      "id": "b2f3c1a0-6a7e-4d0c-9a51-0d6e2f8c1a07",
+      "name": "Check stock",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "REPLACE_WITH_CHAT_ID",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "parse_mode": "HTML",
+          "appendAttribution": false
+        }
+      },
+      "id": "b2f3c1a0-6a7e-4d0c-9a51-0d6e2f8c1a08",
+      "name": "Send to Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        660,
+        200
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "Telegram bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Product updated": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Check stock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check stock": {
+      "main": [
+        [
+          {
+            "node": "Send to Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Dhaka"
+  },
+  "tags": [],
+  "pinData": {}
+}

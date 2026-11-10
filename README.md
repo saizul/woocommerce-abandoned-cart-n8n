@@ -3,7 +3,7 @@
 [![Validate workflows](https://github.com/saizul/woocommerce-abandoned-cart-n8n/actions/workflows/validate.yml/badge.svg)](https://github.com/saizul/woocommerce-abandoned-cart-n8n/actions/workflows/validate.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Four importable [n8n](https://n8n.io) workflows for WooCommerce stores: recover unpaid checkouts, confirm Cash on Delivery orders over WhatsApp, ask for reviews after delivery, and get a daily revenue summary in Telegram. Built for stores where WhatsApp and COD matter (Bangladesh, India, Pakistan, Middle East), with phone number normalization for `+880` numbers out of the box.
+Five importable [n8n](https://n8n.io) workflows for WooCommerce stores: recover unpaid checkouts, confirm Cash on Delivery orders over WhatsApp, ask for reviews after delivery, get a daily revenue summary in Telegram, and receive low-stock alerts in Telegram. Built for stores where WhatsApp and COD matter (Bangladesh, India, Pakistan, Middle East), with phone number normalization for `+880` numbers out of the box.
 
 ## Workflows
 
@@ -13,6 +13,7 @@ Four importable [n8n](https://n8n.io) workflows for WooCommerce stores: recover 
 | 2 | [COD order confirmation](workflows/02-cod-order-confirmation/README.md) | WooCommerce trigger (order created) + WhatsApp webhook | Adds COD orders to a call queue sheet, sends Confirm / Cancel buttons, updates order status and note on reply |
 | 3 | [Post-delivery review request](workflows/03-post-delivery-review-request/README.md) | WooCommerce trigger (order updated) | When an order is completed, waits N days, then asks for a review via WhatsApp or email |
 | 4 | [Daily revenue to Telegram](workflows/04-daily-revenue-telegram/README.md) | Schedule (21:00 daily) | Revenue, order counts, COD vs prepaid and top products for the day |
+| 5 | [Low-stock alert to Telegram](workflows/05-low-stock-telegram-alert/README.md) | WooCommerce trigger (product updated) | Alerts once when a product reaches the stock threshold and once when it sells out, and again only after it was restocked |
 
 ## Requirements
 
@@ -34,10 +35,10 @@ Four importable [n8n](https://n8n.io) workflows for WooCommerce stores: recover 
 | --- | --- | --- |
 | HTTP Basic Auth | WooCommerce REST API | Username is the consumer key, password is the consumer secret |
 | HTTP Header Auth | WhatsApp Cloud API | Name `Authorization`, value `Bearer <permanent token>` |
-| WooCommerce API | WooCommerce Trigger node | Registers its own webhook in your store |
+| WooCommerce API | WooCommerce Trigger node (workflows 2, 3, 5) | Registers its own webhook in your store |
 | Google Sheets OAuth2 | Logs and call queue | |
 | SMTP | Email reminders | |
-| Telegram API | Daily summary | Token from BotFather |
+| Telegram API | Daily summary, low-stock alerts | Token from BotFather |
 
 No keys, tokens or ids are stored in the JSON files. Credentials are referenced by type and a placeholder id only.
 
