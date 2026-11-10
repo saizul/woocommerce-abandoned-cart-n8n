@@ -2,6 +2,13 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Workflow 5: low-stock alert to Telegram from WooCommerce `product.updated`, with a configurable threshold and per-product deduplication (alerts once per level until the stock recovers).
+- Behavioural tests for the workflow 5 Code node.
+
 ## [1.0.0] - 2026-11-09
 
 ### Added
