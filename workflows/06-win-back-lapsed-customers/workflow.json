@@ -1,0 +1,497 @@
+{
+  "name": "WooCommerce - Win-back lapsed customers",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Win-back lapsed customers\nRuns every Monday at 10:00, loads the last year of orders from the WooCommerce REST API and finds customers whose last paid order is older than `lapsedDays` (default 90). Each one gets a single WhatsApp template or email with your coupon, and is not contacted again for `cooldownDays` (default 180).\nCreate the coupon in WooCommerce first, edit Config, assign the credentials and create the \"Win-back Log\" sheet tab.",
+        "width": 520,
+        "height": 220
+      },
+      "id": "b0dac5d2-bbe8-4d2c-83fb-1ee765f4b41f",
+      "name": "Setup notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "weeksInterval": 1,
+              "triggerAtDay": [
+                1
+              ],
+              "triggerAtHour": 10,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "e81dbd21-9464-4976-8833-36f8764e3654",
+      "name": "Every Monday 10:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "b8412a12-2109-4456-866a-c032194cab40",
+              "name": "siteUrl",
+              "value": "https://your-store.example",
+              "type": "string"
+            },
+            {
+              "id": "edb646d6-dfee-4ddb-871c-0af5ffb30256",
+              "name": "shopUrl",
+              "value": "https://your-store.example/shop/",
+              "type": "string"
+            },
+            {
+              "id": "37af4bed-808f-4b6a-858c-d8cd46e51fb8",
+              "name": "channel",
+              "value": "whatsapp",
+              "type": "string"
+            },
+            {
+              "id": "a88a39ef-a462-45d7-a183-d5d2565fed2f",
+              "name": "defaultCountryCode",
+              "value": "880",
+              "type": "string"
+            },
+            {
+              "id": "402bb08b-a048-477b-b1de-f6d10bc7e120",
+              "name": "waPhoneNumberId",
+              "value": "REPLACE_WITH_PHONE_NUMBER_ID",
+              "type": "string"
+            },
+            {
+              "id": "55184491-39ab-474a-b7b1-32257408ed3d",
+              "name": "waLanguage",
+              "value": "en",
+              "type": "string"
+            },
+            {
+              "id": "8594fc03-f861-4f03-9a14-941e9076c472",
+              "name": "waTemplateWinback",
+              "value": "win_back_offer",
+              "type": "string"
+            },
+            {
+              "id": "ddef39cc-5073-4e97-adef-9104bb3fc9b9",
+              "name": "fromEmail",
+              "value": "store@your-store.example",
+              "type": "string"
+            },
+            {
+              "id": "a076969f-e2cd-4a6d-b8cc-1a547cc80111",
+              "name": "couponCode",
+              "value": "WELCOMEBACK10",
+              "type": "string"
+            },
+            {
+              "id": "e356c148-5afd-4534-92a5-f8d09b8bc3bb",
+              "name": "offerText",
+              "value": "10% off your next order",
+              "type": "string"
+            },
+            {
+              "id": "ca27a6d8-ad16-444e-9d72-8bf9c7dc7616",
+              "name": "lapsedDays",
+              "value": 90,
+              "type": "number"
+            },
+            {
+              "id": "bb1a2e92-2049-46a3-9d8f-1b19d1ccd509",
+              "name": "lookbackDays",
+              "value": 365,
+              "type": "number"
+            },
+            {
+              "id": "1f5b82c7-2e70-40ee-9f11-22da0c097298",
+              "name": "minOrders",
+              "value": 1,
+              "type": "number"
+            },
+            {
+              "id": "70c3dc97-6cc2-49b9-9be2-7658d1b6bb88",
+              "name": "cooldownDays",
+              "value": 180,
+              "type": "number"
+            },
+            {
+              "id": "901acb0c-c554-4d1e-9d4a-2b1d04307430",
+              "name": "maxPerRun",
+              "value": 50,
+              "type": "number"
+            },
+            {
+              "id": "a43e7b52-2982-49d9-84d9-7ebad824006c",
+              "name": "excludeEmails",
+              "value": "",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "1c48104a-7a8d-47b2-b188-cdedeb75b003",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Order window to load: from lookbackDays ago until now. It must reach further back than lapsedDays.\nconst cfg = $('Config').first().json;\nconst num = (v, d) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : d);\nconst lapsedDays = num(cfg.lapsedDays, 90);\nconst lookbackDays = Math.max(num(cfg.lookbackDays, 365), lapsedDays + 1);\nconst after = new Date(Date.now() - lookbackDays * 24 * 3600 * 1000).toISOString();\nreturn [{ json: { after, lapsedDays, lookbackDays } }];"
+      },
+      "id": "d70eeea5-23da-4c08-bd73-6a10e5d97946",
+      "name": "Date range",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').first().json.siteUrl }}/wp-json/wc/v3/orders",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "after",
+              "value": "={{ $('Date range').first().json.after }}"
+            },
+            {
+              "name": "per_page",
+              "value": "100"
+            },
+            {
+              "name": "orderby",
+              "value": "date"
+            },
+            {
+              "name": "order",
+              "value": "desc"
+            }
+          ]
+        },
+        "options": {
+          "pagination": {
+            "pagination": {
+              "parameters": {
+                "parameters": [
+                  {
+                    "type": "qs",
+                    "name": "page",
+                    "value": "={{ $pageCount + 1 }}"
+                  }
+                ]
+              },
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ $response.body.length < 100 }}",
+              "limitPagesFetched": true,
+              "maxRequests": 50
+            }
+          }
+        }
+      },
+      "id": "16026ebc-1785-4580-a0db-9f6c6b6634bf",
+      "name": "Get orders",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        200
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "WooCommerce REST (consumer key and secret)"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Group the loaded orders by customer and pick customers whose last paid order is older than lapsedDays.\n// Anyone with a newer order of any status, a recent win-back message or an excluded address is skipped.\nconst cfg = $('Config').first().json;\nconst range = $('Date range').first().json;\nconst DAY = 24 * 3600 * 1000;\nconst now = Date.now();\nconst num = (v, d) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : d);\nconst lapsedDays = num(range.lapsedDays ?? cfg.lapsedDays, 90);\nconst cooldownDays = num(cfg.cooldownDays, 180);\nconst minOrders = num(cfg.minOrders, 1);\nconst maxPerRun = num(cfg.maxPerRun, 50);\nconst PAID = ['completed', 'processing', 'on-hold'];\n\nfunction normalizePhone(raw, cc) {\n  let d = String(raw || '').replace(/\\D/g, '');\n  if (d.startsWith('00')) d = d.slice(2);\n  if (!d) return '';\n  if (d.startsWith(cc)) return d;\n  if (d.startsWith('0')) return cc + d.slice(1);\n  return cc + d;\n}\nconst esc = (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[c]));\nconst cc = String(cfg.defaultCountryCode || '');\nconst excluded = new Set(String(cfg.excludeEmails || '').split(/[\\s,;]+/).map((e) => e.trim().toLowerCase()).filter(Boolean));\nconst createdAt = (o) => Date.parse(o.date_created_gmt ? String(o.date_created_gmt).replace(/Z?$/, 'Z') : o.date_created);\n\nconst orders = $input.all().map((i) => i.json).filter((o) => o && o.id);\nconst recent = new Set(); // email or phone of customers who ordered within lapsedDays (any status)\nconst customers = new Map();\nfor (const o of orders) {\n  const b = o.billing || {};\n  const email = String(b.email || '').trim().toLowerCase();\n  const phone = normalizePhone(b.phone, cc);\n  const at = createdAt(o);\n  if (!Number.isFinite(at) || (!email && !phone)) continue;\n  if (now - at < lapsedDays * DAY) {\n    if (email) recent.add(email);\n    if (phone) recent.add(phone);\n  }\n  if (!PAID.includes(o.status)) continue;\n  const key = email || phone;\n  const c = customers.get(key) || { key, orders: 0, spent: 0, last: 0 };\n  c.orders += 1;\n  c.spent += parseFloat(o.total) || 0;\n  if (at > c.last) Object.assign(c, { last: at, name: b.first_name || '', email, phone, lastOrderId: o.id, currency: o.currency, currencySymbol: o.currency_symbol });\n  customers.set(key, c);\n}\n\n// Remember who was contacted so the same customer is not messaged again before cooldownDays.\nconst state = $getWorkflowStaticData('global');\nstate.contacted = state.contacted || {};\nfor (const [k, t] of Object.entries(state.contacted)) {\n  if (now - t > cooldownDays * DAY) delete state.contacted[k];\n}\nconst contactedRecently = (c) => [c.email, c.phone].some((k) => k && state.contacted[k]);\n\nconst site = String(cfg.siteUrl || '').replace(/\\/+$/, '');\nconst shopUrl = String(cfg.shopUrl || '').trim() || site + '/shop/';\nconst coupon = String(cfg.couponCode || '').trim();\nconst offer = String(cfg.offerText || '').trim() || 'a discount on your next order';\n\nconst picked = [...customers.values()]\n  .filter((c) => c.orders >= minOrders && now - c.last >= lapsedDays * DAY)\n  .filter((c) => !recent.has(c.email) && !recent.has(c.phone))\n  .filter((c) => !excluded.has(c.email) && !contactedRecently(c))\n  .map((c) => ({ ...c, channel: cfg.channel === 'whatsapp' && c.phone ? 'whatsapp' : c.email ? 'email' : '' }))\n  .filter((c) => c.channel)\n  .sort((a, b) => b.spent - a.spent || b.last - a.last)\n  .slice(0, maxPerRun);\n\nfor (const c of picked) {\n  if (c.email) state.contacted[c.email] = now;\n  if (c.phone) state.contacted[c.phone] = now;\n}\nconst keys = Object.keys(state.contacted);\nif (keys.length > 5000) keys.slice(0, keys.length - 5000).forEach((k) => delete state.contacted[k]);\n\nreturn picked.map((c) => {\n  const name = c.name || 'there';\n  const money = (n) => (c.currencySymbol ? c.currencySymbol + n.toFixed(2) : n.toFixed(2) + ' ' + (c.currency || ''));\n  const daysSince = Math.floor((now - c.last) / DAY);\n  const params = [name, coupon || '-', shopUrl].map((text) => ({ type: 'text', text: String(text) }));\n  return {\n    json: {\n      customerKey: c.key,\n      name,\n      email: c.email,\n      phone: c.phone,\n      channel: c.channel,\n      orders: c.orders,\n      totalSpent: money(c.spent),\n      lastOrderId: c.lastOrderId,\n      lastOrderDate: new Date(c.last).toISOString().slice(0, 10),\n      daysSinceLastOrder: daysSince,\n      couponCode: coupon,\n      waMessage: {\n        messaging_product: 'whatsapp',\n        to: c.phone,\n        type: 'template',\n        template: { name: cfg.waTemplateWinback, language: { code: cfg.waLanguage }, components: [{ type: 'body', parameters: params }] },\n      },\n      emailSubject: 'We miss you, ' + name + (coupon ? ' - here is ' + offer : ''),\n      emailHtml:\n        '<p>Hi ' + esc(name) + ',</p>' +\n        '<p>It has been a while since your last order with us, so we wanted to say thank you for shopping with us before.</p>' +\n        (coupon ? '<p>Use code <b>' + esc(coupon) + '</b> at checkout for ' + esc(offer) + '.</p>' : '') +\n        '<p><a href=\"' + esc(shopUrl) + '\">See what is new in the shop</a></p>' +\n        '<p>If you would rather not hear from us, just reply to this email and we will remove you.</p>',\n    },\n  };\n});"
+      },
+      "id": "ee2981d7-a54d-4fcc-b7e4-781b552b7489",
+      "name": "Find lapsed customers",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "70c850d3-afa8-4b06-85a7-bd2d52015333",
+              "leftValue": "={{ $json.channel === 'whatsapp' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "909229c6-9fac-43c0-b2db-63f62dfb5517",
+      "name": "Use WhatsApp?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v21.0/{{ $('Config').first().json.waPhoneNumberId }}/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.waMessage) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 10,
+              "batchInterval": 1000
+            }
+          }
+        }
+      },
+      "id": "a1e56b7a-b85c-4690-96b8-fc9aa36ec028",
+      "name": "WhatsApp win-back",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        100
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "WhatsApp Cloud API (Authorization header)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $('Config').first().json.fromEmail }}",
+        "toEmail": "={{ $json.email }}",
+        "subject": "={{ $json.emailSubject }}",
+        "emailFormat": "html",
+        "html": "={{ $json.emailHtml }}",
+        "options": {}
+      },
+      "id": "b059b43a-2ffd-41e5-a471-2054b868fe50",
+      "name": "Email win-back",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1320,
+        300
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SPREADSHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Win-back Log",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Customer": "={{ $('Find lapsed customers').item.json.name }}",
+            "Email": "={{ $('Find lapsed customers').item.json.email }}",
+            "Phone": "={{ $('Find lapsed customers').item.json.phone }}",
+            "Orders": "={{ $('Find lapsed customers').item.json.orders }}",
+            "Total spent": "={{ $('Find lapsed customers').item.json.totalSpent }}",
+            "Last order": "={{ $('Find lapsed customers').item.json.lastOrderDate }}",
+            "Days since": "={{ $('Find lapsed customers').item.json.daysSinceLastOrder }}",
+            "Coupon": "={{ $('Find lapsed customers').item.json.couponCode }}",
+            "Channel": "={{ $('Find lapsed customers').item.json.channel }}",
+            "Timestamp": "={{ new Date().toISOString() }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "cb5cbd5b-a5ec-4a3b-96ba-381d9cdc7bd3",
+      "name": "Log win-back",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1540,
+        200
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every Monday 10:00": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Date range",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Date range": {
+      "main": [
+        [
+          {
+            "node": "Get orders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get orders": {
+      "main": [
+        [
+          {
+            "node": "Find lapsed customers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find lapsed customers": {
+      "main": [
+        [
+          {
+            "node": "Use WhatsApp?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Use WhatsApp?": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp win-back",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Email win-back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp win-back": {
+      "main": [
+        [
+          {
+            "node": "Log win-back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email win-back": {
+      "main": [
+        [
+          {
+            "node": "Log win-back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Dhaka"
+  },
+  "tags": [],
+  "pinData": {}
+}

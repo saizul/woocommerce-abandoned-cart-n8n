@@ -26,6 +26,30 @@ const SECRET_PATTERNS = [
 const TRIGGER = /(trigger|webhook)$/i;
 const NOTE_TYPE = 'n8n-nodes-base.stickyNote';
 const PLACEHOLDER_ID = /^(REPLACE|YOUR|PLACEHOLDER)/i;
+const WEBHOOK_TYPE = 'n8n-nodes-base.webhook';
+const BANGLA_SUMMARY = '## বাংলা সারসংক্ষেপ';
+const WORKFLOW_DIR = /^(\d{2})-[a-z0-9]+(-[a-z0-9]+)*$/;
+
+// Query or header parameters that must come from a credential, never from a literal value.
+const SECRET_PARAM = /^(consumer_key|consumer_secret|access_token|api[_-]?key|apikey|token|secret|client_secret|password|authorization|x-api-key)$/i;
+// Literal secrets inside URLs: https://user:pass@host and ?consumer_secret=...
+const URL_USERINFO = /\bhttps?:\/\/[^\s/:@"'{}()]+:[^\s/@"'{}()]+@/i;
+const URL_SECRET_QUERY = /[?&](consumer_key|consumer_secret|access_token|api_?key|token|client_secret|password)=([^&#\s"'{}()+]+)/gi;
+
+// $('Node name') and $node["Node name"] references in expressions and Code nodes.
+const NODE_REFS = [/\$\(\s*(['"`])((?:(?!\1).)+?)\1\s*\)/g, /\$node\[\s*(['"])((?:(?!\1).)+?)\1\s*\]/g];
+
+const isPlaceholder = (v) => PLACEHOLDER_ID.test(String(v)) || /^<[^>]+>$/.test(String(v));
+
+export function findNodeReferences(text) {
+  const names = new Set();
+  for (const re of NODE_REFS) {
+    for (const m of String(text).matchAll(re)) {
+      if (!m[2].includes('${')) names.add(m[2]);
+    }
+  }
+  return [...names];
+}
 
 function collectFiles(target) {
   const stat = fs.statSync(target);
@@ -99,13 +123,22 @@ export function validateWorkflow(wf, label = 'workflow') {
     if (n.type === 'n8n-nodes-base.webhook' && n.parameters?.responseMode === 'responseNode') {
       // needs a Respond to Webhook node somewhere; checked below
     }
-    if (n.credentials) {
+    if (n.typeVersion !== undefined && typeof n.typeVersion === 'number' && !(n.typeVersion >= 1)) {
+      err(`${tag}: "typeVersion" must be pinned to a released version (>= 1)`);
+    }
+    if (n.credentials !== undefined && (!n.credentials || typeof n.credentials !== 'object' || Array.isArray(n.credentials))) {
+      err(`${tag}: "credentials" must be an object`);
+    } else if (n.credentials) {
       for (const [ctype, c] of Object.entries(n.credentials)) {
         if (!c || typeof c !== 'object' || typeof c.id !== 'string' || !PLACEHOLDER_ID.test(c.id)) {
           err(`${tag}: credential "${ctype}" id must be a placeholder starting with REPLACE/YOUR/PLACEHOLDER`);
         }
+        if (!c || typeof c.name !== 'string' || !c.name.trim()) {
+          err(`${tag}: credential "${ctype}" needs a descriptive "name" so it can be matched after import`);
+        }
       }
     }
+    if (n.type === 'n8n-nodes-base.httpRequest') checkHttpSecrets(n.parameters ?? {}, (m) => err(`${tag}: ${m}`));
   });
 
   // connections reference existing nodes
@@ -159,14 +192,93 @@ export function validateWorkflow(wf, label = 'workflow') {
     err('a webhook uses responseMode "responseNode" but there is no Respond to Webhook node');
   }
 
+  // expressions and node references
+  wf.nodes.forEach((n, i) => {
+    if (!n || n.type === NOTE_TYPE) return;
+    const tag = `nodes[${i}]${n.name ? ` "${n.name}"` : ''}`;
+    walkStrings(n.parameters ?? {}, (s, trail) => {
+      if (s.startsWith('=')) {
+        const open = (s.match(/\{\{/g) || []).length;
+        const close = (s.match(/\}\}/g) || []).length;
+        if (open !== close) err(`${tag}: unbalanced {{ }} in expression at parameters.${trail}`);
+      }
+      if (s.startsWith('=') || n.type === 'n8n-nodes-base.code') {
+        for (const ref of findNodeReferences(s)) {
+          if (!byName.has(ref)) err(`${tag}: references missing node "${ref}" at parameters.${trail}`);
+          else if (byName.get(ref).type === NOTE_TYPE) err(`${tag}: references sticky note "${ref}" at parameters.${trail}`);
+        }
+      }
+    });
+  });
+
   // secret-looking strings
   walkStrings(wf, (s, trail) => {
     for (const [re, what] of SECRET_PATTERNS) {
       if (re.test(s)) err(`possible ${what} at ${trail}`);
     }
+    if (URL_USERINFO.test(s)) err(`URL with embedded username and password at ${trail} (use a credential)`);
+    for (const m of s.matchAll(URL_SECRET_QUERY)) {
+      if (!isPlaceholder(m[2])) err(`URL query parameter "${m[1]}" carries a literal secret at ${trail} (use a credential)`);
+    }
   });
 
   return { errors, warnings };
+}
+
+// HTTP Request nodes must not carry keys or tokens as literal query or header values.
+function checkHttpSecrets(params, report) {
+  for (const group of ['queryParameters', 'headerParameters', 'bodyParameters']) {
+    for (const p of params[group]?.parameters ?? []) {
+      if (!p || typeof p.name !== 'string' || !SECRET_PARAM.test(p.name.trim())) continue;
+      const v = p.value;
+      if (typeof v === 'string' && v !== '' && !v.startsWith('=') && !isPlaceholder(v)) {
+        report(`${group} "${p.name}" has a literal value (move it to a credential)`);
+      }
+    }
+  }
+}
+
+// Checks that span several workflows: folder naming, README per workflow, unique names and webhook paths.
+// entries: [{ label, wf, readme }] where readme is the README.md text or null when it is missing.
+export function validateRepository(entries) {
+  const errors = [];
+  const names = new Map();
+  const numbers = new Map();
+  const paths = new Map();
+  const webhookIds = new Map();
+
+  for (const { label, wf, readme } of entries) {
+    const dir = WORKFLOW_DIR.exec(label);
+    if (!dir) errors.push(`${label}: folder name must look like "NN-short-name" (lowercase, dashes)`);
+    else if (numbers.has(dir[1])) errors.push(`${label}: number ${dir[1]} is already used by ${numbers.get(dir[1])}`);
+    else numbers.set(dir[1], label);
+
+    if (typeof readme !== 'string') errors.push(`${label}: README.md is missing next to workflow.json`);
+    else {
+      if (!/^# \S/m.test(readme)) errors.push(`${label}: README.md needs a "# " title`);
+      if (!readme.includes('## Setup')) errors.push(`${label}: README.md needs a "## Setup" section`);
+      if (!readme.includes(BANGLA_SUMMARY)) errors.push(`${label}: README.md needs a "${BANGLA_SUMMARY}" section`);
+    }
+
+    if (!wf || !Array.isArray(wf.nodes)) continue;
+    if (typeof wf.name === 'string' && wf.name.trim()) {
+      if (names.has(wf.name)) errors.push(`${label}: workflow name "${wf.name}" is also used by ${names.get(wf.name)}`);
+      else names.set(wf.name, label);
+    }
+    for (const n of wf.nodes) {
+      if (!n || typeof n !== 'object') continue;
+      if (n.type === WEBHOOK_TYPE && typeof n.parameters?.path === 'string') {
+        const key = `${(n.parameters.httpMethod || 'GET').toUpperCase()} ${n.parameters.path.replace(/^\/+|\/+$/g, '')}`;
+        if (paths.has(key)) errors.push(`${label}: webhook "${key}" in "${n.name}" clashes with ${paths.get(key)}`);
+        else paths.set(key, `${label} "${n.name}"`);
+      }
+      if (typeof n.webhookId === 'string') {
+        if (webhookIds.has(n.webhookId)) errors.push(`${label}: webhookId of "${n.name}" is also used by ${webhookIds.get(n.webhookId)}`);
+        else webhookIds.set(n.webhookId, `${label} "${n.name}"`);
+      }
+    }
+  }
+  return { errors };
 }
 
 function main() {
@@ -176,6 +288,7 @@ function main() {
   if (files.length === 0) { console.error('No workflow files found.'); process.exit(1); }
 
   let failed = 0;
+  const entries = [];
   for (const file of files) {
     const rel = path.relative(process.cwd(), file) || file;
     let wf;
@@ -186,7 +299,11 @@ function main() {
       failed++;
       continue;
     }
-    const { errors, warnings } = validateWorkflow(wf, path.basename(path.dirname(file)));
+    const label = path.basename(path.dirname(file));
+    const readmePath = path.join(path.dirname(file), 'README.md');
+    // Folder and README rules apply to the repository layout (workflows/NN-name/workflow.json).
+    if (path.basename(file) === 'workflow.json') entries.push({ label, wf, readme: fs.existsSync(readmePath) ? fs.readFileSync(readmePath, 'utf8') : null });
+    const { errors, warnings } = validateWorkflow(wf, label);
     const nodeCount = Array.isArray(wf.nodes) ? wf.nodes.length : 0;
     if (errors.length) {
       failed++;
@@ -197,8 +314,13 @@ function main() {
     }
     warnings.forEach((w) => console.warn(`  warn: ${w}`));
   }
+  const repo = validateRepository(entries);
+  if (repo.errors.length) {
+    console.error('FAIL repository checks');
+    repo.errors.forEach((e) => console.error(`  - ${e}`));
+  }
   console.log(`\n${files.length - failed}/${files.length} workflows valid`);
-  process.exit(failed ? 1 : 0);
+  process.exit(failed || repo.errors.length ? 1 : 0);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();

@@ -3,7 +3,7 @@
 [![Validate workflows](https://github.com/saizul/woocommerce-abandoned-cart-n8n/actions/workflows/validate.yml/badge.svg)](https://github.com/saizul/woocommerce-abandoned-cart-n8n/actions/workflows/validate.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Five importable [n8n](https://n8n.io) workflows for WooCommerce stores: recover unpaid checkouts, confirm Cash on Delivery orders over WhatsApp, ask for reviews after delivery, get a daily revenue summary in Telegram, and receive low-stock alerts in Telegram. Built for stores where WhatsApp and COD matter (Bangladesh, India, Pakistan, Middle East), with phone number normalization for `+880` numbers out of the box.
+Six importable [n8n](https://n8n.io) workflows for WooCommerce stores: recover unpaid checkouts, confirm Cash on Delivery orders over WhatsApp, ask for reviews after delivery, get a daily revenue summary in Telegram, receive low-stock alerts in Telegram, and win back customers who stopped ordering. Built for stores where WhatsApp and COD matter (Bangladesh, India, Pakistan, Middle East), with phone number normalization for `+880` numbers out of the box.
 
 ## Workflows
 
@@ -14,6 +14,7 @@ Five importable [n8n](https://n8n.io) workflows for WooCommerce stores: recover 
 | 3 | [Post-delivery review request](workflows/03-post-delivery-review-request/README.md) | WooCommerce trigger (order updated) | When an order is completed, waits N days, then asks for a review via WhatsApp or email |
 | 4 | [Daily revenue to Telegram](workflows/04-daily-revenue-telegram/README.md) | Schedule (21:00 daily) | Revenue, order counts, COD vs prepaid and top products for the day |
 | 5 | [Low-stock alert to Telegram](workflows/05-low-stock-telegram-alert/README.md) | WooCommerce trigger (product updated) | Alerts once when a product reaches the stock threshold and once when it sells out, and again only after it was restocked |
+| 6 | [Win-back lapsed customers](workflows/06-win-back-lapsed-customers/README.md) | Schedule (Monday 10:00 weekly) | Finds customers with no order for 90 days, sends one WhatsApp or email coupon per customer with a 180-day cooldown, logs to Google Sheets |
 
 ## Requirements
 
@@ -37,7 +38,7 @@ Five importable [n8n](https://n8n.io) workflows for WooCommerce stores: recover 
 | HTTP Header Auth | WhatsApp Cloud API | Name `Authorization`, value `Bearer <permanent token>` |
 | WooCommerce API | WooCommerce Trigger node (workflows 2, 3, 5) | Registers its own webhook in your store |
 | Google Sheets OAuth2 | Logs and call queue | |
-| SMTP | Email reminders | |
+| SMTP | Email reminders and win-back offers | |
 | Telegram API | Daily summary, low-stock alerts | Token from BotFather |
 
 No keys, tokens or ids are stored in the JSON files. Credentials are referenced by type and a placeholder id only.
@@ -45,11 +46,19 @@ No keys, tokens or ids are stored in the JSON files. Credentials are referenced 
 ## Validate and test
 
 ```bash
-npm run validate   # structure, connections, orphans, secret scan
-npm test           # validator tests and Code node syntax checks
+npm run validate   # structure, connections, node references, secret scan, repository layout
+npm test           # validator tests, Code node syntax checks and behaviour tests for workflows 5 and 6
 ```
 
-The validator has no dependencies. It checks that each file parses, that nodes have the required fields and unique ids/names, that all connections point to existing nodes, that no node is orphaned or unreachable from a trigger, that credential ids are placeholders, and that no string looks like a secret. The same checks run in [GitHub Actions](.github/workflows/validate.yml).
+The validator has no dependencies and needs Node.js 20 or newer. For each workflow it checks that:
+
+- the file parses and every node has the required fields, a pinned `typeVersion` and a unique id and name;
+- all connections point to existing nodes and no node is orphaned or unreachable from a trigger;
+- every `$('Node name')` or `$node["Node name"]` reference in expressions and Code nodes points to an existing node (catches renamed nodes), and `{{ }}` braces are balanced;
+- credentials use a placeholder id and a descriptive name;
+- no string looks like a secret, no URL embeds `user:password@` or a literal `consumer_key`, `token` or similar query value, and HTTP Request query and header parameters such as `Authorization` are not hard-coded.
+
+Across the repository it checks that each folder is named `NN-short-name` with a unique number, has a `README.md` with a `## Setup` section and a Bangla summary, and that workflow names, webhook method and path pairs and `webhookId`s are unique, so two imported workflows cannot clash on activation. The same checks run in [GitHub Actions](.github/workflows/validate.yml) on Node.js 20, 22 and 24.
 
 ## Notes on WhatsApp
 
